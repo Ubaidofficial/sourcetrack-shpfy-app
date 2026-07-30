@@ -12,5 +12,10 @@ export const action = async ({ request }) => {
     await db.session.deleteMany({ where: { shop } });
   }
 
+  // Drop the shop's SourceTrack site key too. It is the merchant's credential;
+  // holding it after they have uninstalled us serves no purpose. deleteMany (not
+  // delete) so a redelivery after the row is gone is a no-op rather than a throw.
+  await db.sourcetrackConfig.deleteMany({ where: { shop } });
+
   return new Response();
 };
