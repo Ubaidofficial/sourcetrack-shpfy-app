@@ -13,8 +13,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Matches package.json engines: >=20.19 <22 || >=22.12
-          node-version: "22.12"
+          # Latest 22.x. package.json engines allows >=22.12, but the transitive
+          # @shopify/polaris-types requires >=22.18.0, so 22.12 fails npm ci with
+          # EBADENGINE. Tracking 22.x keeps us above that floor.
+          node-version: "22"
           cache: npm
 
       - run: npm ci
