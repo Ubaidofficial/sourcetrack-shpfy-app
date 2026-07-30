@@ -228,6 +228,15 @@ export async function reportConversion(body, { timeoutMs = 10000 } = {}) {
     };
   }
 
+  // 429 is retryable, and MUST be treated as such. /api/conversion/offline is
+  // rate limited per-IP as well as per-site, and every merchant's orders leave
+  // this app from one server IP — so the shared global-IP limiter is reachable
+  // at scale even when no single store is busy. Classifying 429 with the other
+  // 4xx would drop those orders permanently.
+  if (response.status === 429) {
+    return { status: "transient", httpStatus: 429, error: "rate limited" };
+  }
+
   // 402 = plan/trial gate, 401 = bad site key: both are merchant-config
   // problems that retrying will not clear.
   if (response.status >= 400 && response.status < 500) {

@@ -201,6 +201,20 @@ test("401 (bad site key) and 402 (plan gate) are 'rejected' — never retried", 
   }
 });
 
+test("429 maps to 'transient', NOT rejected — a rate limit must not lose the order", async () => {
+  // Every merchant's orders leave this app from one IP, so the API's shared
+  // global-IP conversion limiter is reachable. Lumping 429 in with the other
+  // 4xx would drop those orders permanently instead of retrying them.
+  const restore = stubFetch(jsonResponse(429, { error: "Too many requests" }));
+  try {
+    const result = await reportConversion({});
+    assert.equal(result.status, "transient");
+    assert.equal(result.httpStatus, 429);
+  } finally {
+    restore();
+  }
+});
+
 test("a 5xx maps to 'transient' so Shopify redelivers", async () => {
   const restore = stubFetch(jsonResponse(503, { error: "unavailable" }));
   try {
