@@ -4,17 +4,16 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import {
+  maskSiteKey,
+  readSiteKey,
+  saveSiteKey,
+} from "../sourcetrack-config.server";
 
 // Accepts both site-key shapes in the wild: the uuid the sites table defaults to
 // and prefixed keys. Deliberately loose on shape, strict on charset — the API is
 // the authority on whether a key is real.
 const SITE_KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
-
-// Show enough for the merchant to confirm they pasted the right key, never the
-// key itself. A site key is a credential and must not be re-rendered in full.
-function maskSiteKey(siteKey) {
-  return `••••••••${siteKey.slice(-4)}`;
-}
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -23,10 +22,22 @@ export const loader = async ({ request }) => {
     where: { shop: session.shop },
   });
 
+  // Decrypt, then mask. The mask is a suffix of the real key, so it is only
+  // ever derived from a value that decrypted cleanly — a stored value we cannot
+  // read is reported as broken, not rendered as a reassuring row of dots.
+  const stored = config ? readSiteKey(config) : null;
+  if (stored && !stored.ok) {
+    console.error(
+      `[settings] ${session.shop}: stored site key could not be decrypted (${stored.reason}). ` +
+        `Orders are NOT being reported until the merchant re-enters it.`,
+    );
+  }
+
   return {
     shop: session.shop,
     // Only ever the mask crosses to the browser.
-    maskedSiteKey: config?.siteKey ? maskSiteKey(config.siteKey) : null,
+    maskedSiteKey: stored?.ok ? maskSiteKey(stored.siteKey) : null,
+    siteKeyUnreadable: Boolean(stored && !stored.ok),
     configuredAt: config?.updatedAt ? config.updatedAt.toISOString() : null,
   };
 };
@@ -56,17 +67,29 @@ export const action = async ({ request }) => {
     };
   }
 
-  await db.sourcetrackConfig.upsert({
-    where: { shop: session.shop },
-    create: { shop: session.shop, siteKey },
-    update: { siteKey },
-  });
+  try {
+    await saveSiteKey(db, session.shop, siteKey);
+  } catch (err) {
+    // Encryption failed — almost certainly a missing or malformed
+    // SOURCETRACK_CONFIG_ENCRYPTION_KEY on this deployment. Fail the save.
+    // Storing the key unencrypted instead is never the fallback. err.message
+    // names the env var, never a value.
+    console.error(
+      `[settings] ${session.shop}: site key NOT saved — ${err.message}`,
+    );
+    return {
+      ok: false,
+      error:
+        "Could not securely store the site key. This is a problem on our side — please contact SourceTrack support.",
+    };
+  }
 
   return { ok: true, saved: true };
 };
 
 export default function Index() {
-  const { shop, maskedSiteKey, configuredAt } = useLoaderData();
+  const { shop, maskedSiteKey, siteKeyUnreadable, configuredAt } =
+    useLoaderData();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
   const [siteKey, setSiteKey] = useState("");
@@ -109,6 +132,16 @@ export default function Index() {
               Reporting to site key <s-text>{maskedSiteKey}</s-text>
               {configuredAt ? ` — saved ${configuredAt.slice(0, 10)}` : ""}. Enter
               a new key below to change it.
+            </s-paragraph>
+          </s-banner>
+        )}
+
+        {siteKeyUnreadable && (
+          <s-banner tone="critical" heading="Site key needs re-entering">
+            <s-paragraph>
+              A site key is stored for this store but cannot be read back, so
+              orders are not being reported. Enter the key again below to fix
+              it.
             </s-paragraph>
           </s-banner>
         )}

@@ -32,6 +32,25 @@ Press P to open the URL to your app. Once you click install, you can start devel
 
 Local development is powered by [the Shopify CLI](https://shopify.dev/docs/apps/tools/cli). It logs into your account, connects to an app, provides environment variables, updates remote config, creates a tunnel and provides commands to generate extensions.
 
+### SourceTrack environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `SOURCETRACK_CONFIG_ENCRYPTION_KEY` | **yes** | AES-256-GCM key used to encrypt each shop's SourceTrack site key at rest. |
+| `SOURCETRACK_API_URL` | no | Overrides the SourceTrack API base. Defaults to `https://api.srctk.com`. |
+
+Generate the encryption key once per environment and store it in that environment's secret store (never in the repo, never in `shopify.app.toml`):
+
+```shell
+openssl rand -hex 32
+```
+
+Notes:
+
+- **This key is specific to this app.** Do not reuse the main SourceTrack API's `ENCRYPTION_KEY`. Two deployables get two secrets, so a leak of one does not decrypt the other's data.
+- Without it, saving a site key fails with an explicit error and paid-order webhooks return 500 rather than reporting. Nothing is ever stored unencrypted as a fallback.
+- The key is not rotatable in place: changing it makes existing stored site keys unreadable, and each merchant has to re-enter theirs from the app's settings page.
+
 ### Authenticating and querying data
 
 To authenticate and query data you can use the `shopify` const that is exported from `/app/shopify.server.js`:
