@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Latest 22.x. package.json engines allows >=22.12, but the transitive
+          # @shopify/polaris-types requires >=22.18.0, so 22.12 fails npm ci with
+          # EBADENGINE. Tracking 22.x keeps us above that floor.
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # The build imports the generated Prisma client, so generate before building.
+      # No database is created and no migration is applied — generate is offline.
+      - run: npx prisma generate
+
+      - run: npm run lint
+
+      - run: npm test
+
+      - run: npm run build

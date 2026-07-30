@@ -7,31 +7,25 @@ name = "sourcetrack-shpfy-app"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,write_metaobjects,write_metaobject_definitions"
-
-[product.metafields.app.demo_info]
-type = "single_line_text_field"
-name = "Demo Source Info"
-description = "Tracks products created by the Shopify app template for development"
-
-  [product.metafields.app.demo_info.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example]
-name = "Example"
-description = "An example metaobject definition created by this template"
-
-  [metaobjects.app.example.access]
-  admin = "merchant_read_write"
-
-[metaobjects.app.example.fields.title]
-name = "Title"
-type = "single_line_text_field"
-required = true
-
-[metaobjects.app.example.fields.description]
-name = "Description"
-type = "multi_line_text_field"
+#
+# read_orders ONLY. Rationale:
+#   - orders/paid requires read_orders (or read_marketplace_orders) to register.
+#     A subscription declared without it is silently ignored at deploy.
+#   - read_all_orders is NOT requested. It only widens the *Admin API read*
+#     window past 60 days; this app never reads orders back — every field it
+#     reports arrives in the webhook payload itself, in real time. Adding it
+#     would mean asking Shopify for approval on data we do not use.
+#   - read_customers is NOT requested. The conversion payload we send is
+#     deliberately PII-free (no email/phone/name/address) — matching the
+#     existing SourceTrack Shopify rail, which documents that same guarantee.
+#     Requesting it would pull this app into Shopify's Level 2 protected
+#     customer data review, and would create a PII store subject to all three
+#     GDPR paths in the main API. We need none of it to attribute revenue.
+#
+# NOTE: orders are protected customer data even at read_orders / totals-only,
+# so Level 1 protected-customer-data access must still be requested and
+# approved in the Partner Dashboard before orders/paid will register.
+scopes = "read_orders"
 
 [webhooks]
 api_version = "2026-10"
@@ -43,6 +37,15 @@ api_version = "2026-10"
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
+
+  # Paid orders -> SourceTrack $conversion. orders/paid only (NOT orders/create):
+  # the manual rail accepts orders/create but immediately drops it unless
+  # financial_status == 'paid', so subscribing to both would only add
+  # deliveries we discard. No `include_fields` — note_attributes carries the
+  # st_aid stitching key and filtering it out would silently break attribution.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/paid"
+  topics = [ "orders/paid" ]
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
