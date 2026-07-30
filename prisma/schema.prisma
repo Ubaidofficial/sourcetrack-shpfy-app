@@ -16,14 +16,17 @@ datasource db {
 // Per-shop SourceTrack destination. One row per installed shop: which
 // SourceTrack workspace this shop's paid orders get reported to.
 //
-// siteKey is the merchant's own SourceTrack site key. It is a credential —
-// never render it back to the browser in full and never log it (the settings
-// UI shows only a masked suffix and requires re-entry to change).
+// The site key is the merchant's own SourceTrack credential. It is stored
+// ENCRYPTED at rest (AES-256-GCM, SOURCETRACK_CONFIG_ENCRYPTION_KEY) — the
+// column holds `iv:ciphertext:tag`, never the key itself. Read it only through
+// readSiteKey() in app/sourcetrack-config.server.js; never render it back to
+// the browser in full and never log it (the settings UI shows only a masked
+// suffix and requires re-entry to change).
 model SourcetrackConfig {
-  shop      String   @id
-  siteKey   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  shop             String   @id
+  siteKeyEncrypted String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model Session {

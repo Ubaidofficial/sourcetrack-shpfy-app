@@ -1,6 +1,7 @@
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { buildConversionPayload, reportConversion } from "../sourcetrack.server";
+import { readSiteKey } from "../sourcetrack-config.server";
 
 // orders/paid -> SourceTrack $conversion.
 //
@@ -23,7 +24,7 @@ export const action = async ({ request }) => {
   }
 
   const config = await db.sourcetrackConfig.findUnique({ where: { shop } });
-  if (!config?.siteKey) {
+  if (!config?.siteKeyEncrypted) {
     // Not a transient failure: no amount of retrying makes an unconfigured shop
     // configured. Ack so Shopify does not burn its retry window, but log loudly
     // — silent 200s on the money rail are how revenue goes missing unnoticed.
@@ -34,7 +35,23 @@ export const action = async ({ request }) => {
     return new Response();
   }
 
-  const built = buildConversionPayload(payload, config.siteKey, webhookId);
+  // The stored column is ciphertext. This is the ONLY place the real key is
+  // recovered, and it exists solely to be POSTed to SourceTrack below.
+  const stored = readSiteKey(config);
+  if (!stored.ok) {
+    // Usually a missing SOURCETRACK_CONFIG_ENCRYPTION_KEY on this deployment,
+    // which a redeploy fixes — so 500 and let Shopify redeliver into the fixed
+    // deployment rather than acking the order into oblivion. If instead the
+    // stored value is genuinely unrecoverable, the retries fail too and the
+    // merchant re-enters the key in the app; either way the failure is loud.
+    console.error(
+      `[orders/paid] ${shop}: NOT REPORTED — stored site key could not be decrypted ` +
+        `(${stored.reason}) for order ${payload?.id ?? "unknown"}. Returning 500 for Shopify retry.`,
+    );
+    return new Response("SourceTrack site key unreadable", { status: 500 });
+  }
+
+  const built = buildConversionPayload(payload, stored.siteKey, webhookId);
   if (!built.ok) {
     // A verified Shopify payload we cannot parse is a real defect (payload-shape
     // drift, or an order with no usable total). Retrying an unparseable payload
