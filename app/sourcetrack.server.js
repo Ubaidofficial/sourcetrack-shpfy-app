@@ -99,6 +99,52 @@ export function extractStitchingId(payload) {
 }
 
 /**
+ * Read an order's amount and its unit AS A PAIR, always from one source object.
+ *
+ * Previously these were two independent fallback chains: value took total_price →
+ * current_total_price, while currency took payload.currency →
+ * payload.presentment_currency. Nothing tied them together, so a payload missing
+ * `currency` but carrying `presentment_currency` would have stamped a SHOP-currency
+ * amount with the BUYER's currency — e.g. 753.06 (USD) labelled CAD. Shopify
+ * documents total_price as being in the shop currency and `currency` as the shop
+ * currency, so those two belong together and presentment_currency never belongs
+ * with either.
+ *
+ * Order of preference, each a single object carrying its own currency_code:
+ *   1. total_price_set.shop_money          — amount + unit, self-describing
+ *   2. current_total_price_set.shop_money  — same, post-edit totals
+ *   3. total_price          + currency     — flat pair, both shop currency
+ *   4. current_total_price  + currency     — flat pair, both shop currency
+ *
+ * DELIBERATELY SHOP MONEY AT EVERY STEP, never presentment_money. Presentment
+ * amounts are denominated in whatever each buyer paid in; summing them across
+ * buyers produces a meaningless total, so revenue-by-source must aggregate one
+ * currency. What the buyer actually paid is a separate, order-level display
+ * concern and is not captured here.
+ *
+ * Kept byte-for-byte equivalent to readShopifyOrderAmount() in the main repo's
+ * api/routes/shopify-webhook.js. The two rails share an idempotency namespace, so
+ * they must agree on the amount for the same order or a dedupe would net two
+ * different numbers.
+ *
+ * @param {object} payload  the orders/paid webhook body
+ * @returns {{ rawValue: unknown, rawCurrency: unknown }}
+ */
+export function readOrderAmount(payload) {
+  for (const set of [payload?.total_price_set, payload?.current_total_price_set]) {
+    const shopMoney = set?.shop_money;
+    if (shopMoney?.amount !== undefined && shopMoney?.amount !== null) {
+      return { rawValue: shopMoney.amount, rawCurrency: shopMoney.currency_code };
+    }
+  }
+  const rawValue =
+    payload?.total_price !== undefined
+      ? payload.total_price
+      : payload?.current_total_price;
+  return { rawValue, rawCurrency: payload?.currency };
+}
+
+/**
  * Turn a paid-order webhook payload into the /api/conversion/offline body.
  *
  * Returns { ok: false, reason } rather than throwing, so the caller decides the
@@ -118,19 +164,16 @@ export function buildConversionPayload(payload, siteKey, webhookId) {
     return { ok: false, reason: "missing order id" };
   }
 
-  // Mirror the manual rail: prefer total_price, fall back to
-  // current_total_price. current_total_price reflects post-edit totals, so it is
-  // the fallback, not the primary.
-  const rawValue =
-    payload?.total_price !== undefined
-      ? payload.total_price
-      : payload?.current_total_price;
+  // Mirror the manual rail: amount and unit are read AS A PAIR, from one source
+  // object. current_total_price reflects post-edit totals, so it stays the
+  // fallback, not the primary.
+  const { rawValue, rawCurrency } = readOrderAmount(payload);
   const value = parseFloat(rawValue);
   if (!Number.isFinite(value) || value < 0) {
     return { ok: false, reason: "invalid order value" };
   }
 
-  const currency = String(payload?.currency || payload?.presentment_currency || "")
+  const currency = String(rawCurrency ?? "")
     .trim()
     .toUpperCase();
   // The API requires a currency whenever value > 0 and rejects the request
