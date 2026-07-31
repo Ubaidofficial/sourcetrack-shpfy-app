@@ -123,6 +123,72 @@ test("current_total_price is the fallback when total_price is absent", () => {
   assert.equal(buildConversionPayload(payload, "sk_test", null).body.conversion_value, 99);
 });
 
+// ─── value/currency are read as a PAIR ───────────────────────────────────────
+// The bug these guard: value and currency used to come from two independent
+// fallback chains, so a payload could pair a shop-currency AMOUNT with the
+// buyer's presentment CURRENCY and mislabel real money.
+
+test("presentment_currency is never used as the unit for a shop-currency amount", () => {
+  // The exact mispairing shape: no flat `currency`, but a presentment currency
+  // present. total_price is documented as shop currency, so labelling it CAD
+  // would be a lie. Refusing is correct; stamping presentment_currency is not.
+  const payload = order({ currency: undefined, presentment_currency: "CAD" });
+  const result = buildConversionPayload(payload, "sk_test", null);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /currency/);
+});
+
+test("total_price_set.shop_money supplies amount and unit together", () => {
+  const payload = order({
+    total_price: "149.95",
+    currency: "USD",
+    total_price_set: {
+      shop_money: { amount: "753.06", currency_code: "USD" },
+      presentment_money: { amount: "1057.00", currency_code: "CAD" },
+    },
+  });
+  const { body } = buildConversionPayload(payload, "sk_test", null);
+  // Shop money, not presentment: 753.06/USD — the real #JTNK2ZT10 shape.
+  assert.equal(body.conversion_value, 753.06);
+  assert.equal(body.currency, "USD");
+});
+
+test("presentment_money is never the captured value, even when it is the larger number", () => {
+  const payload = order({
+    total_price: undefined,
+    currency: undefined,
+    total_price_set: {
+      shop_money: { amount: "753.06", currency_code: "USD" },
+      presentment_money: { amount: "1057.00", currency_code: "CAD" },
+    },
+  });
+  const { body } = buildConversionPayload(payload, "sk_test", null);
+  assert.notEqual(body.conversion_value, 1057);
+  assert.equal(body.conversion_value, 753.06);
+  assert.equal(body.currency, "USD");
+});
+
+test("current_total_price_set.shop_money is the fallback money bag", () => {
+  const payload = order({
+    total_price: undefined,
+    currency: undefined,
+    current_total_price_set: {
+      shop_money: { amount: "99.00", currency_code: "EUR" },
+    },
+  });
+  const { body } = buildConversionPayload(payload, "sk_test", null);
+  assert.equal(body.conversion_value, 99);
+  assert.equal(body.currency, "EUR");
+});
+
+test("the flat total_price + currency pair still works for single-currency stores", () => {
+  // The common case must not regress: a store with no money bags at all.
+  const payload = order({ total_price: "149.95", currency: "USD" });
+  const { body } = buildConversionPayload(payload, "sk_test", null);
+  assert.equal(body.conversion_value, 149.95);
+  assert.equal(body.currency, "USD");
+});
+
 test("a paid order with no usable currency is refused, not sent as-is", () => {
   const payload = order({ currency: "", presentment_currency: "" });
   const result = buildConversionPayload(payload, "sk_test", null);
